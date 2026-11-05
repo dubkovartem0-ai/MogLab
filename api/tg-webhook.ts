@@ -1,5 +1,37 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { supabaseAdmin } from './_supabase';
+
+/**
+ * Safely resolves Supabase admin client using dynamic import & env validation
+ * Never throws or blocks execution if Supabase is unconfigured or module is missing
+ */
+async function getSupabaseAdminSafe() {
+  const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+  const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  if (!supabaseUrl || !supabaseServiceKey) {
+    return null;
+  }
+
+  try {
+    // 1. Try to import from supabaseClient
+    const mod = await import('./supabaseClient.js').catch(async () => {
+      return await import('./supabaseClient');
+    }).catch(() => null);
+
+    if (mod && mod.supabaseAdmin) {
+      return mod.supabaseAdmin;
+    }
+
+    // 2. Direct fallback using @supabase/supabase-js
+    const { createClient } = await import('@supabase/supabase-js');
+    return createClient(supabaseUrl, supabaseServiceKey, {
+      auth: { persistSession: false }
+    });
+  } catch (err) {
+    console.warn('[tg-webhook] Safe Supabase initialization notice:', err);
+    return null;
+  }
+}
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   // Always log method and headers for Vercel debugging
@@ -80,7 +112,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
         console.log('[tg-webhook] Launching WebApp button with URL:', appUrl);
 
-        // Immediate SendMessage to user
+        // Immediate SendMessage to user - NEVER BLOCKED BY DATABASE
         try {
           const sendRes = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
             method: 'POST',
@@ -112,9 +144,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
 
         // Non-blocking background registration in Supabase (never fails the webhook response)
-        if (supabaseAdmin && message.from?.id) {
+        if (message.from?.id) {
           (async () => {
             try {
+              const supabase = await getSupabaseAdminSafe();
+              if (!supabase) {
+                console.log('[tg-webhook] Supabase not configured, skipping background user upsert.');
+                return;
+              }
+
               const tgId = message.from.id;
               let referredBy: number | null = null;
               if (text.startsWith('/start ref_')) {
@@ -124,7 +162,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 }
               }
 
-              await supabaseAdmin.from('users').upsert(
+              await supabase.from('users').upsert(
                 {
                   tg_id: tgId,
                   username: message.from.username || null,
@@ -159,43 +197,46 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           }
         }
 
-        if (supabaseAdmin && chargeId && targetTgId) {
+        if (chargeId && targetTgId) {
           try {
-            const { data: existingTx } = await supabaseAdmin
-              .from('star_transactions')
-              .select('telegram_payment_charge_id')
-              .eq('telegram_payment_charge_id', chargeId)
-              .single();
-
-            if (!existingTx) {
-              await supabaseAdmin.from('star_transactions').insert({
-                telegram_payment_charge_id: chargeId,
-                tg_id: targetTgId,
-                amount_stars: totalAmount
-              });
-
-              const { data: userRow } = await supabaseAdmin
-                .from('users')
-                .select('credits')
-                .eq('tg_id', targetTgId)
+            const supabase = await getSupabaseAdminSafe();
+            if (supabase) {
+              const { data: existingTx } = await supabase
+                .from('star_transactions')
+                .select('telegram_payment_charge_id')
+                .eq('telegram_payment_charge_id', chargeId)
                 .single();
 
-              const currentCredits = userRow?.credits || 0;
-              await supabaseAdmin
-                .from('users')
-                .update({ credits: currentCredits + 1 })
-                .eq('tg_id', targetTgId);
+              if (!existingTx) {
+                await supabase.from('star_transactions').insert({
+                  telegram_payment_charge_id: chargeId,
+                  tg_id: targetTgId,
+                  amount_stars: totalAmount
+                });
 
-              // Notify user of stars credit
-              await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  chat_id: targetTgId,
-                  text: '⭐️ Оплата 100 Telegram Stars подтверждена!\nВам начислен +1 PRO-кредит в MogLab. Откройте приложение для детального анализа.'
-                })
-              });
-              console.log('[tg-webhook] Credited +1 PRO to user:', targetTgId);
+                const { data: userRow } = await supabase
+                  .from('users')
+                  .select('credits')
+                  .eq('tg_id', targetTgId)
+                  .single();
+
+                const currentCredits = userRow?.credits || 0;
+                await supabase
+                  .from('users')
+                  .update({ credits: currentCredits + 1 })
+                  .eq('tg_id', targetTgId);
+
+                // Notify user of stars credit
+                await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    chat_id: targetTgId,
+                    text: '⭐️ Оплата 100 Telegram Stars подтверждена!\nВам начислен +1 PRO-кредит в MogLab. Откройте приложение для детального анализа.'
+                  })
+                });
+                console.log('[tg-webhook] Credited +1 PRO to user:', targetTgId);
+              }
             }
           } catch (payDbErr) {
             console.error('[tg-webhook] Error processing star transaction:', payDbErr);

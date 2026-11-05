@@ -83,3 +83,8 @@ export function getAuthenticatedUser(reqHeaders: Record<string, string | string[
 
   return null;
 }
+
+// Fallback endpoint handler if accessed directly via /api/supabaseClient
+export default function handler(_req: any, res: any) {
+  return res.status(200).json({ ok: true, message: 'Supabase client helper' });
+}
