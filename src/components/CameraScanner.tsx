@@ -51,13 +51,11 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
     let isCancelled = false;
 
     async function initStream() {
+      setIsLoadingModel(true);
+      setModelError(null);
+
+      // Step 1: Request camera permission and stream
       try {
-        setIsLoadingModel(true);
-        // Pre-warm MediaPipe with VIDEO runningMode
-        await BiometricsService.getLandmarker('VIDEO');
-
-        if (isCancelled) return;
-
         stream = await navigator.mediaDevices.getUserMedia({
           video: {
             facingMode: 'user',
@@ -66,22 +64,72 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
           },
           audio: false
         });
-
-        if (videoRef.current && !isCancelled) {
-          videoRef.current.srcObject = stream;
-          await videoRef.current.play();
-          setIsLoadingModel(false);
-          startFrameLoop();
-        }
-      } catch (err: any) {
-        console.error('Camera/Landmarker init failed:', err);
-        setModelError(
-          err.name === 'NotAllowedError'
-            ? 'Доступ к камере заблокирован. Разрешите доступ в настройках браузера или Telegram.'
-            : 'Не удалось инициализировать нейросетевую модель. Проверьте соединение с интернетом.'
-        );
+      } catch (camErr: any) {
+        console.error('Camera access error:', camErr);
         setIsLoadingModel(false);
+        setModelError('Нет доступа к камере. Разрешите доступ в настройках Telegram/браузера');
+        return;
       }
+
+      if (isCancelled) {
+        stream.getTracks().forEach(t => t.stop());
+        return;
+      }
+
+      // Step 2: Attach stream to video element with mobile attributes
+      if (videoRef.current) {
+        const video = videoRef.current;
+        video.setAttribute('playsinline', 'true');
+        video.setAttribute('webkit-playsinline', 'true');
+        video.setAttribute('x5-playsinline', 'true');
+        video.muted = true;
+        video.defaultMuted = true;
+        video.autoplay = true;
+        video.srcObject = stream;
+
+        try {
+          await video.play();
+        } catch (playErr) {
+          console.warn('Video play interrupted or delayed:', playErr);
+        }
+
+        // Step 3: Wait until video is ready (readyState >= 2)
+        if (video.readyState < 2) {
+          await new Promise<void>((resolve) => {
+            const onReady = () => {
+              if (video.readyState >= 2 && video.videoWidth > 0) {
+                video.removeEventListener('loadeddata', onReady);
+                video.removeEventListener('canplay', onReady);
+                resolve();
+              }
+            };
+            video.addEventListener('loadeddata', onReady);
+            video.addEventListener('canplay', onReady);
+            setTimeout(resolve, 2000);
+          });
+        }
+      }
+
+      if (isCancelled) {
+        stream?.getTracks().forEach(t => t.stop());
+        return;
+      }
+
+      // Step 4: Load & pre-warm FaceLandmarker in dedicated try/catch
+      try {
+        await BiometricsService.getLandmarker('VIDEO');
+      } catch (wasmErr: any) {
+        console.error('FaceLandmarker WASM loading error:', wasmErr);
+        setIsLoadingModel(false);
+        setModelError('Не удалось загрузить модуль биометрии. Проверьте соединение с интернетом.');
+        return;
+      }
+
+      if (isCancelled) return;
+
+      // Step 5: Both camera and model are ready — start analysis loop
+      setIsLoadingModel(false);
+      startFrameLoop();
     }
 
     initStream();
@@ -96,16 +144,21 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
   // 2. Real-time Analysis Loop (60 FPS Gatekeeper & Landmark Overlay)
   const startFrameLoop = () => {
     const loop = async () => {
-      if (!videoRef.current || !canvasRef.current || videoRef.current.paused || videoRef.current.ended) {
-        animFrameRef.current = requestAnimationFrame(loop);
+      if (!videoRef.current || !canvasRef.current) {
         return;
       }
 
       const video = videoRef.current;
       const canvas = canvasRef.current;
-      const ctx = canvas.getContext('2d');
 
-      if (!ctx || video.videoWidth === 0 || video.videoHeight === 0) {
+      // Strict check: video must be ready (readyState >= 2) and have valid frame dimensions
+      if (video.readyState < 2 || video.videoWidth === 0 || video.videoHeight === 0 || video.paused || video.ended) {
+        animFrameRef.current = requestAnimationFrame(loop);
+        return;
+      }
+
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
         animFrameRef.current = requestAnimationFrame(loop);
         return;
       }
@@ -277,19 +330,22 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
 
   return (
     <div className="relative w-full h-[calc(100vh-65px)] bg-black overflow-hidden flex flex-col justify-between">
-      {/* Hidden processing video */}
+      {/* Live camera video stream for mobile browsers (iOS WebKit & Android) */}
       <video
         ref={videoRef}
+        autoPlay
         playsInline
         muted
-        autoPlay
-        className="absolute inset-0 w-full h-full object-cover -scale-x-100 opacity-0 pointer-events-none"
+        // @ts-ignore
+        webkit-playsinline="true"
+        x5-playsinline="true"
+        className="absolute inset-0 w-full h-full object-cover -scale-x-100"
       />
 
       {/* Main Canvas rendering video frame + neon mesh overlay */}
       <canvas
         ref={canvasRef}
-        className="absolute inset-0 w-full h-full object-cover -scale-x-100"
+        className="absolute inset-0 w-full h-full object-cover -scale-x-100 pointer-events-none"
       />
 
       {/* Dark vignette overlay with face targeting oval */}
