@@ -121,11 +121,21 @@ export class PixelAnalyzerService {
       // 1. Sclera White Balance
       const wb = this.calibrateSclera(ctx, width, height, landmarks);
 
-      // 2. Forehead & Cheeks Skin Sampling
-      // Cheeks: [116, 123, 147, 213, 192, 345, 352, 376, 433, 416]
-      // Forehead: [10, 67, 109, 108, 151, 337, 297]
-      const skinIndices = [116, 123, 147, 213, 345, 352, 376, 433, 108, 109, 337];
-      const skinPoints = skinIndices.map(idx => landmarks[idx]).filter(Boolean);
+      // 2. Multi-Zone Skin Sampling (Cheeks, Forehead, Nasolabial folds, Periorbital lines)
+      // Captures micro-relief shadows, wrinkles, coarse pores and stubble
+      const foreheadIndices = [10, 67, 109, 108, 151, 337, 297, 9];
+      const cheekIndices = [116, 123, 147, 213, 192, 345, 352, 376, 433, 416];
+      const wrinkleAndFoldIndices = [92, 165, 186, 57, 287, 391, 410, 130, 246, 359, 466];
+      const lowerJawTextureIndices = [58, 172, 150, 379, 365, 397];
+
+      const allSkinIndices = [
+        ...foreheadIndices,
+        ...cheekIndices,
+        ...wrinkleAndFoldIndices,
+        ...lowerJawTextureIndices
+      ];
+
+      const skinPoints = allSkinIndices.map(idx => landmarks[idx]).filter(Boolean);
       const skinSamples = this.sampleRegion(ctx, width, height, skinPoints);
 
       let skinLumSum = 0;
@@ -148,12 +158,22 @@ export class PixelAnalyzerService {
       const skinLuminanceAvg = skinLumSum / sampleCount;
       const skinRednessIndex = rednessSum / sampleCount;
 
-      // Variance & Standard Deviation of skin luminance
+      // Variance (Global Std Dev) + Micro-texture shadow gradient (High-frequency wrinkles / stubble)
       let varianceSum = 0;
       correctedLums.forEach(lum => {
         varianceSum += Math.pow(lum - skinLuminanceAvg, 2);
       });
-      const skinLuminanceVariance = Math.sqrt(varianceSum / sampleCount);
+      const stdDev = Math.sqrt(varianceSum / sampleCount);
+
+      // Measure local pixel contrast gradients (wrinkles & stubble create sharp dark shadow drops)
+      let localGradientSum = 0;
+      for (let i = 1; i < correctedLums.length; i++) {
+        localGradientSum += Math.abs(correctedLums[i] - correctedLums[i - 1]);
+      }
+      const avgLocalGradient = correctedLums.length > 1 ? localGradientSum / (correctedLums.length - 1) : 0;
+
+      // Composite Variance: smooth glass skin gives 6..9; wrinkles, texture or stubble push to 20..35+
+      const skinLuminanceVariance = stdDev + avgLocalGradient * 1.35;
 
       // 3. Eyebrows & Lips Contrast Analysis (Michelson Contrast)
       // Eyebrow landmarks: left [70, 63, 105, 66], right [336, 296, 334, 293]

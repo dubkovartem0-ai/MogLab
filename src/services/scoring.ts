@@ -7,6 +7,39 @@ import {
   RadarMetric
 } from '../types/biometrics';
 
+/**
+ * Standard Normal Cumulative Distribution Function Phi(z)
+ */
+function phi(z: number): number {
+  return 0.5 * (1 + Math.sign(z) * Math.sqrt(1 - Math.exp((-2 * z * z) / Math.PI)));
+}
+
+/**
+ * Converts a Gaussian Z-score into a 1.0 - 10.0 clinical PSL/Harmony rating scale:
+ * Population Mean: 4.6 (typical faces score 4.0 - 5.0)
+ * Standard Deviation: 1.35
+ * Z =  0.0 -> 4.6 (Mid Tier Normie baseline)
+ * Z = +1.8 -> 7.03 (Top 3.5% threshold)
+ * Z = +2.2 -> 7.57 (Chad / Stacy elite tier)
+ * Z = -1.5 -> 2.58 (Sub-tier / Low tier)
+ */
+function zToScore(z: number): number {
+  const mean = 4.6;
+  const std = 1.35;
+  const val = mean + z * std;
+  return Math.max(1.2, Math.min(9.8, Math.round(val * 10) / 10));
+}
+
+interface CandidateHalo {
+  id: string;
+  name: string;
+  badge: string;
+  zScore: number;
+  percentile: number;
+  valueText: string;
+  impact: string;
+}
+
 export class ScoringService {
   /**
    * Evaluates biometrics and colorimetry into standard clinical PSL/Harmony tiers
@@ -17,181 +50,299 @@ export class ScoringService {
     colorimetry: PixelColorMetrics,
     verifiedCamera: boolean
   ): BiometricReport {
-    // 1. Calculate Bone Base Score (1.0 to 10.0)
-    let boneScore = 5.0;
+    // =========================================================================
+    // 1. BONE BASE CALCULATION (Genetic cranial baseline using Gaussian Z-Scores)
+    // =========================================================================
+    let boneScore = 4.6;
+    let zBone = 0;
+
+    // Canthal Tilt Z-score: Population mean shifted to +4.0° (std dev 2.5°)
+    // Slight positive tilt (+3°..+4.5°) is completely average, NOT a Halo or extreme boost!
+    const zCanthal = (biometrics.canthalTiltDegrees - 4.0) / 2.5;
+
+    // Symmetry Z-score: mean 0.82, std dev 0.065
+    const zSymmetry = (biometrics.centralSymmetryIndex - 0.82) / 0.065;
 
     if (gender === 'male') {
-      // Ideal FWHR: ~1.85 to 2.05
-      const fwhrScore = 10 - Math.min(5, Math.abs(biometrics.fwhr - 1.95) * 12);
-      // Ideal Bigonial Ratio: ~0.88 to 0.94
-      const jawScore = 10 - Math.min(5, Math.abs(biometrics.bigonialRatio - 0.91) * 20);
-      // Ideal Midface: ~0.98 to 1.05
-      const midfaceScore = 10 - Math.min(5, Math.abs(biometrics.midfaceRatio - 1.0) * 15);
-      // Ideal Canthal Tilt: +2.0° to +5.0°
-      const tiltScore = biometrics.canthalTiltDegrees >= 2.0
-        ? Math.min(10, 7.5 + biometrics.canthalTiltDegrees * 0.6)
-        : Math.max(3, 7.0 + biometrics.canthalTiltDegrees * 0.8);
-      // Symmetry
-      const symScore = biometrics.centralSymmetryIndex * 10;
+      // 1. FWHR (Facial Width-to-Height Ratio): Mean 1.84, ideal masculine ~1.95 - 2.05
+      const zFwhr = 2.0 - Math.abs(biometrics.fwhr - 1.98) / 0.08;
 
-      boneScore = (fwhrScore * 0.25 + jawScore * 0.25 + midfaceScore * 0.2 + tiltScore * 0.15 + symScore * 0.15);
+      // 2. Bigonial Ratio (Jaw width to bizygomatic width): Mean 0.85, ideal ~0.91 - 0.94
+      const zJaw = (biometrics.bigonialRatio - 0.85) / 0.045;
+
+      // 3. Midface Ratio (Compact midface): Mean 0.91, ideal ~1.00
+      const zMidface = 1.8 - Math.abs(biometrics.midfaceRatio - 1.00) / 0.055;
+
+      // Lowered Canthal Tilt weight to 0.10, prioritized Jawline & FWHR
+      zBone = zFwhr * 0.28 + zJaw * 0.28 + zMidface * 0.20 + zSymmetry * 0.14 + zCanthal * 0.10;
     } else {
       // Female Harmony Engine
-      // Facial Thirds Balance
-      const thirdsScore = biometrics.facialThirdsBalance.balanceScore * 10;
-      // Ogee Curve
-      const ogeeScore = biometrics.ogeeCurveProminence * 10;
-      // Canthal Tilt (feline positive tilt favored)
-      const tiltScore = biometrics.canthalTiltDegrees >= 3.0
-        ? Math.min(10, 8.0 + biometrics.canthalTiltDegrees * 0.5)
-        : Math.max(3, 7.0 + biometrics.canthalTiltDegrees * 0.7);
-      // Philtrum to chin (ideal 1:2 or 0.5)
-      const philtrumScore = 10 - Math.min(5, Math.abs(biometrics.philtrumToChinRatio - 0.5) * 12);
-      // Symmetry
-      const symScore = biometrics.centralSymmetryIndex * 10;
+      // 1. Facial Thirds Balance: Mean 0.74, std 0.09
+      const zThirds = (biometrics.facialThirdsBalance.balanceScore - 0.74) / 0.09;
 
-      boneScore = (thirdsScore * 0.25 + ogeeScore * 0.2 + tiltScore * 0.2 + philtrumScore * 0.15 + symScore * 0.2);
+      // 2. Ogee Curve (Cheekbone projection): Mean 0.65, std 0.09
+      const zOgee = (biometrics.ogeeCurveProminence - 0.65) / 0.09;
+
+      // 3. Philtrum to Chin: Mean 0.42, ideal ~0.50
+      const zPhiltrum = 1.8 - Math.abs(biometrics.philtrumToChinRatio - 0.50) / 0.06;
+
+      zBone = zThirds * 0.28 + zOgee * 0.26 + zSymmetry * 0.18 + zPhiltrum * 0.18 + zCanthal * 0.10;
     }
 
-    boneScore = Math.max(2.5, Math.min(9.8, boneScore));
+    boneScore = zToScore(zBone);
 
-    // 2. Calculate Appeal Score (1.0 to 10.0) from skin texture, erythema & facial contrast
-    // Skin variance: ideal < 10 (glass skin), > 22 is textured/uneven
-    const skinVarianceScore = Math.max(2, Math.min(10, 10 - (colorimetry.skinLuminanceVariance - 8) * 0.5));
-    // Redness index: ideal ~1.05 to 1.15, > 1.3 is inflammation/redness
-    const rednessScore = Math.max(2, Math.min(10, 10 - Math.max(0, colorimetry.skinRednessIndex - 1.15) * 18));
-    // Facial contrast: ideal > 0.25 (high contrast), < 0.18 is washed out
-    const contrastScore = Math.max(2, Math.min(10, colorimetry.overallFacialContrast * 32));
+    // =========================================================================
+    // 2. APPEAL SCORE CALCULATION (Skin Variance, Contrast, Redness)
+    // =========================================================================
+    // Skin Variance Sigmoid Response:
+    // Glass skin (< 9.0): S_var >= 7.6
+    // Average texture (13.0 - 16.0): S_var ~ 4.5 - 5.5
+    // Wrinkles, deep shadow folds, coarse stubble (> 22.0): S_var drops to 1.8 - 2.8!
+    const variance = colorimetry.skinLuminanceVariance;
+    const skinVarianceScore = 1.5 + 8.2 / (1.0 + Math.exp((variance - 14.0) / 3.8));
 
-    const appealScore = Math.max(2.0, Math.min(9.5, (skinVarianceScore * 0.4 + rednessScore * 0.3 + contrastScore * 0.3)));
+    // Facial Contrast (Michelson contrast of eyebrows, lash line, lips):
+    // Average ~0.20 -> 4.8. High contrast (> 0.28) -> 7.0 - 8.5. Washed out (< 0.14) -> 2.5 - 3.2
+    const contrast = colorimetry.overallFacialContrast;
+    const contrastScore = Math.max(1.5, Math.min(9.5, 4.8 + ((contrast - 0.20) / 0.04) * 1.15));
 
-    // 3. Current Score (Combined 60% Bone Structure, 40% Appeal)
-    let currentScore = Math.round((boneScore * 0.6 + appealScore * 0.4) * 10) / 10;
-    currentScore = Math.max(1.0, Math.min(9.9, currentScore));
+    // Skin Redness Index (Erythema / Inflammation / Acne):
+    // Normal ~1.08 - 1.14 -> 5.5. Elevated > 1.25 -> drops to 2.0 - 3.0
+    const redness = colorimetry.skinRednessIndex;
+    const rednessScore = Math.max(1.5, Math.min(9.0, 5.5 - Math.max(0, redness - 1.12) * 22));
 
-    // 4. Potential Score (Achieved when Appeal reaches max potential 8.8 - 9.5)
-    const potentialAppeal = Math.max(8.5, appealScore + 2.0);
-    let potentialScore = Math.round((boneScore * 0.6 + potentialAppeal * 0.4) * 10) / 10;
-    potentialScore = Math.max(currentScore + 0.6, Math.min(9.9, potentialScore));
+    // Skin Variance is the primary driver of Appeal (55% weight):
+    // Deep wrinkles or severe stubble drop total Appeal to 2.0 - 3.2!
+    const appealScore = Math.max(
+      1.5,
+      Math.min(9.5, skinVarianceScore * 0.55 + contrastScore * 0.25 + rednessScore * 0.20)
+    );
 
-    // 5. Tier classification
+    // =========================================================================
+    // 3. OVERALL CURRENT & POTENTIAL SCORES (Wide Gaussian distribution)
+    // =========================================================================
+    // 60% Bone structure + 40% Appeal
+    let currentScore = Math.round((boneScore * 0.60 + appealScore * 0.40) * 10) / 10;
+    currentScore = Math.max(1.5, Math.min(9.8, currentScore));
+
+    // Potential Score (Appeal maximized through debloating and optimal skincare)
+    const potentialAppeal = Math.min(9.2, Math.max(appealScore + 1.8, 8.2));
+    let potentialScore = Math.round((boneScore * 0.60 + potentialAppeal * 0.40) * 10) / 10;
+    potentialScore = Math.max(currentScore + 0.5, Math.min(9.8, potentialScore));
+
+    // =========================================================================
+    // 4. TIER CLASSIFICATION
+    // =========================================================================
     let currentTier = 'MTN';
     if (gender === 'male') {
-      if (currentScore < 4.0) currentTier = 'Subhuman';
-      else if (currentScore < 5.0) currentTier = 'LTN (Low Tier Normie)';
-      else if (currentScore < 6.0) currentTier = 'MTN (Mid Tier Normie)';
-      else if (currentScore < 7.0) currentTier = 'HTN (High Tier Normie)';
-      else if (currentScore < 8.2) currentTier = 'Chadlite';
+      if (currentScore < 3.5) currentTier = 'Subhuman';
+      else if (currentScore < 4.4) currentTier = 'LTN (Low Tier Normie)';
+      else if (currentScore < 5.4) currentTier = 'MTN (Mid Tier Normie)';
+      else if (currentScore < 6.8) currentTier = 'HTN (High Tier Normie)';
+      else if (currentScore < 8.0) currentTier = 'Chadlite';
       else currentTier = 'Chad';
     } else {
-      if (currentScore < 4.0) currentTier = 'Sub-tier';
-      else if (currentScore < 5.0) currentTier = 'LTN (Low Tier)';
-      else if (currentScore < 6.0) currentTier = 'MTN (Mid Tier)';
-      else if (currentScore < 7.0) currentTier = 'HTN (High Tier)';
-      else if (currentScore < 8.2) currentTier = 'Stacylite';
+      if (currentScore < 3.5) currentTier = 'Sub-tier';
+      else if (currentScore < 4.4) currentTier = 'LTN (Low Tier)';
+      else if (currentScore < 5.4) currentTier = 'MTN (Mid Tier)';
+      else if (currentScore < 6.8) currentTier = 'HTN (High Tier)';
+      else if (currentScore < 8.0) currentTier = 'Stacylite';
       else currentTier = 'Stacy';
     }
 
-    // 6. Halos Discovery (Top 2 highest percentile features)
-    const candidates: HaloItem[] = [];
+    // =========================================================================
+    // 5. BALANCED HALOS DISCOVERY (Ranked strictly by highest Z-Score)
+    // =========================================================================
+    const candidates: CandidateHalo[] = [];
 
-    // Check Canthal Tilt
-    if (biometrics.canthalTiltDegrees > 1.0) {
-      const pct = Math.min(99, Math.round(75 + biometrics.canthalTiltDegrees * 4.5));
+    // Helper to calculate percentile from Z-Score
+    const calcPct = (z: number) => Math.min(99, Math.max(50, Math.round(phi(z) * 100)));
+
+    // 1. Canthal Tilt: ONLY eligible if tilt is significantly positive (Z >= 0.8, tilt >= +6.0°)
+    if (zCanthal >= 0.8) {
       candidates.push({
         id: 'canthal_tilt',
         name: 'Positive Canthal Tilt',
         badge: 'Hunter Eyes Area',
-        percentile: pct,
+        zScore: zCanthal,
+        percentile: calcPct(zCanthal),
         valueText: `+${biometrics.canthalTiltDegrees.toFixed(1)}°`,
-        impact: '+0.6 к эстетике орбитальной зоны'
+        impact: '+0.7 к хищному вектору орбитальной зоны'
       });
     }
 
-    // Check FWHR
-    if (gender === 'male' && biometrics.fwhr >= 1.82 && biometrics.fwhr <= 2.10) {
+    // 2. Jawline / Bigonial Ratio (Gonial Width)
+    const zJaw = (biometrics.bigonialRatio - 0.85) / 0.045;
+    if (zJaw >= 0.6) {
       candidates.push({
-        id: 'fwhr',
-        name: 'Оптимальный FWHR',
-        badge: 'Маскулинная база',
-        percentile: 94,
-        valueText: `${biometrics.fwhr.toFixed(2)}`,
-        impact: '+0.8 к плотности лицевой геометрии'
+        id: 'jaw_base',
+        name: 'Широкая челюсть (Gonial Width)',
+        badge: 'Костная структура',
+        zScore: zJaw,
+        percentile: calcPct(zJaw),
+        valueText: `${biometrics.bigonialRatio.toFixed(2)} Ratio`,
+        impact: '+0.8 к четкости и маскулинности овала'
       });
     }
 
-    // Check Facial Contrast
-    if (colorimetry.overallFacialContrast >= 0.23) {
-      const pct = Math.min(98, Math.round(70 + colorimetry.overallFacialContrast * 90));
+    // 3. Central Symmetry Index
+    if (zSymmetry >= 0.6) {
+      candidates.push({
+        id: 'symmetry',
+        name: 'Central Symmetry Index',
+        badge: 'Краниальная гармония',
+        zScore: zSymmetry,
+        percentile: calcPct(zSymmetry),
+        valueText: `${Math.round(biometrics.centralSymmetryIndex * 100)}%`,
+        impact: '+0.6 к симметрии половин лица'
+      });
+    }
+
+    // 4. Facial Contrast
+    const zContrast = (colorimetry.overallFacialContrast - 0.20) / 0.045;
+    if (zContrast >= 0.6) {
       candidates.push({
         id: 'contrast',
         name: 'High Facial Contrast',
         badge: 'Свет и пигментация',
-        percentile: pct,
+        zScore: zContrast,
+        percentile: calcPct(zContrast),
         valueText: `${Math.round(colorimetry.overallFacialContrast * 100)}%`,
         impact: '+0.7 к выразительности взгляда'
       });
     }
 
-    // Check Symmetry
-    if (biometrics.centralSymmetryIndex >= 0.88) {
+    // 5. Male FWHR
+    if (gender === 'male') {
+      const zFwhr = 2.0 - Math.abs(biometrics.fwhr - 1.98) / 0.08;
+      if (zFwhr >= 0.6) {
+        candidates.push({
+          id: 'fwhr',
+          name: 'Оптимальный FWHR',
+          badge: 'Маскулинная база',
+          zScore: zFwhr,
+          percentile: calcPct(zFwhr),
+          valueText: `${biometrics.fwhr.toFixed(2)}`,
+          impact: '+0.8 к плотности лицевой геометрии'
+        });
+      }
+
+      // Compact Midface
+      const zMidface = 1.8 - Math.abs(biometrics.midfaceRatio - 1.00) / 0.055;
+      if (zMidface >= 0.6) {
+        candidates.push({
+          id: 'midface',
+          name: 'Компактный Midface',
+          badge: 'Пропорции лица',
+          zScore: zMidface,
+          percentile: calcPct(zMidface),
+          valueText: `${biometrics.midfaceRatio.toFixed(2)} Ratio`,
+          impact: '+0.5 к неотении средней трети'
+        });
+      }
+    } else {
+      // Female Thirds Balance
+      const zThirds = (biometrics.facialThirdsBalance.balanceScore - 0.74) / 0.09;
+      if (zThirds >= 0.6) {
+        candidates.push({
+          id: 'thirds',
+          name: 'Facial Thirds Balance',
+          badge: 'Идеальные трети',
+          zScore: zThirds,
+          percentile: calcPct(zThirds),
+          valueText: `${biometrics.facialThirdsBalance.upper}% / ${biometrics.facialThirdsBalance.middle}% / ${biometrics.facialThirdsBalance.lower}%`,
+          impact: '+0.8 к гармонии пропорций'
+        });
+      }
+
+      // Female Ogee Curve Prominence
+      const zOgee = (biometrics.ogeeCurveProminence - 0.65) / 0.09;
+      if (zOgee >= 0.6) {
+        candidates.push({
+          id: 'ogee',
+          name: 'Ogee Curve Prominence',
+          badge: 'Скуловая дуга',
+          zScore: zOgee,
+          percentile: calcPct(zOgee),
+          valueText: `${biometrics.ogeeCurveProminence.toFixed(2)}`,
+          impact: '+0.7 к плавности скулового перехода'
+        });
+      }
+    }
+
+    // 6. Glass Skin Texture (Low Luminance Variance)
+    const zSkin = (14.0 - variance) / 3.5;
+    if (zSkin >= 0.6) {
       candidates.push({
-        id: 'symmetry',
-        name: 'Central Symmetry Index',
-        badge: 'Краниальная гармония',
-        percentile: Math.min(99, Math.round(biometrics.centralSymmetryIndex * 100)),
+        id: 'glass_skin',
+        name: 'Glass Skin Texture',
+        badge: 'Уход и микрорельеф',
+        zScore: zSkin,
+        percentile: calcPct(zSkin),
+        valueText: `${variance.toFixed(1)} Var`,
+        impact: '+0.8 к свежести и ровности тона'
+      });
+    }
+
+    // Fallbacks if fewer than 2 candidates qualified
+    if (candidates.length < 2) {
+      candidates.push({
+        id: 'symmetry_fallback',
+        name: 'Facial Symmetry',
+        badge: 'Симметрия лица',
+        zScore: zSymmetry,
+        percentile: calcPct(zSymmetry),
         valueText: `${Math.round(biometrics.centralSymmetryIndex * 100)}%`,
-        impact: '+0.5 к пропорциональности'
-      });
-    }
-
-    // Check Female Thirds or Midface
-    if (gender === 'female' && biometrics.facialThirdsBalance.balanceScore >= 0.85) {
-      candidates.push({
-        id: 'thirds',
-        name: 'Facial Thirds Balance',
-        badge: 'Идеальные трети',
-        percentile: 92,
-        valueText: `${biometrics.facialThirdsBalance.upper}% / ${biometrics.facialThirdsBalance.middle}% / ${biometrics.facialThirdsBalance.lower}%`,
-        impact: '+0.9 к неотении и гармонии'
-      });
-    }
-
-    // Fallback candidates if fewer than 2
-    if (candidates.length < 2) {
-      candidates.push({
-        id: 'jaw_base',
-        name: 'Gonial Harmony',
-        badge: 'Костная структура',
-        percentile: 86,
-        valueText: `${biometrics.bigonialRatio.toFixed(2)} Ratio`,
-        impact: '+0.4 к четкости овала'
+        impact: '+0.4 к балансу черт'
       });
     }
     if (candidates.length < 2) {
       candidates.push({
-        id: 'skin_lum',
-        name: 'Even Luminance Tone',
-        badge: 'Уход за кожей',
-        percentile: 84,
-        valueText: `${colorimetry.skinLuminanceAvg} Lum`,
-        impact: '+0.3 к свежести Appeal'
+        id: 'contrast_fallback',
+        name: 'Periorbital Contrast',
+        badge: 'Контрастность',
+        zScore: zContrast,
+        percentile: calcPct(zContrast),
+        valueText: `${Math.round(colorimetry.overallFacialContrast * 100)}%`,
+        impact: '+0.4 к глубине взгляда'
       });
     }
 
-    // Sort descending by percentile and take top 2
-    candidates.sort((a, b) => b.percentile - a.percentile);
-    const halos = candidates.slice(0, 2);
+    // Sort strictly descending by Z-score (greatest positive deviation from norm)
+    candidates.sort((a, b) => b.zScore - a.zScore);
+    const halos: HaloItem[] = candidates.slice(0, 2).map(c => ({
+      id: c.id,
+      name: c.name,
+      badge: c.badge,
+      percentile: c.percentile,
+      valueText: c.valueText,
+      impact: c.impact
+    }));
 
-    // 7. Radar Chart 6-axis Data (0 to 100)
-    const eyeAreaVal = Math.min(100, Math.round((Math.max(0, biometrics.canthalTiltDegrees + 5) / 12) * 100));
-    const midfaceVal = gender === 'male'
-      ? Math.min(100, Math.round((1 - Math.min(0.3, Math.abs(biometrics.midfaceRatio - 1.0))) * 100))
-      : Math.min(100, Math.round(biometrics.facialThirdsBalance.balanceScore * 100));
-    const jawlineVal = Math.min(100, Math.round((biometrics.bigonialRatio / 1.0) * 95));
-    const symmetryVal = Math.min(100, Math.round(biometrics.centralSymmetryIndex * 100));
-    const skinQualityVal = Math.min(100, Math.round(Math.max(20, 100 - (colorimetry.skinLuminanceVariance - 5) * 4)));
-    const contrastVal = Math.min(100, Math.round(Math.min(1, colorimetry.overallFacialContrast / 0.35) * 100));
+    // =========================================================================
+    // 6. RADAR CHART (6 Macro-Axes Normalized 0 - 100%)
+    // =========================================================================
+    // 1. Eye Area: canthal tilt, ESR and eye symmetry
+    const eyeAreaVal = Math.max(15, Math.min(100, Math.round(50 + zCanthal * 22)));
+
+    // 2. Midface: compact proportions
+    const zMidfaceNorm = gender === 'male'
+      ? (1.8 - Math.abs(biometrics.midfaceRatio - 1.00) / 0.055)
+      : ((biometrics.facialThirdsBalance.balanceScore - 0.74) / 0.09);
+    const midfaceVal = Math.max(15, Math.min(100, Math.round(50 + zMidfaceNorm * 22)));
+
+    // 3. Jawline: bigonial width & angle
+    const zJawNorm = (biometrics.bigonialRatio - 0.85) / 0.045;
+    const jawlineVal = Math.max(15, Math.min(100, Math.round(50 + zJawNorm * 22)));
+
+    // 4. Symmetry: cranial alignment
+    const symmetryVal = Math.max(15, Math.min(100, Math.round(50 + zSymmetry * 22)));
+
+    // 5. Skin Quality: directly derived from skinVarianceScore
+    const skinQualityVal = Math.max(10, Math.min(100, Math.round(skinVarianceScore * 10.5)));
+
+    // 6. Contrast: facial Michelson contrast
+    const contrastVal = Math.max(15, Math.min(100, Math.round(contrastScore * 10.5)));
 
     const radarData: RadarMetric[] = [
       { subject: 'Eye Area', value: eyeAreaVal, fullMark: 100 },
@@ -202,8 +353,10 @@ export class ScoringService {
       { subject: 'Contrast', value: contrastVal, fullMark: 100 }
     ];
 
-    // 8. Failos & Debuff calculations for Paywall Hook
-    const debuff = Math.round((potentialScore - currentScore) * 10) / 10;
+    // =========================================================================
+    // 7. PAYWALL DEBUFF HOOK
+    // =========================================================================
+    const debuff = Math.max(0.6, Math.round((potentialScore - currentScore) * 10) / 10);
     const failosCount = 3;
 
     return {
