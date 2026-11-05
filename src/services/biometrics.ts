@@ -2,60 +2,126 @@ import { FaceLandmarker, FilesetResolver } from '@mediapipe/tasks-vision';
 import { BiometricMetrics, GenderMode, LandmarkPoint } from '../types/biometrics';
 
 export class BiometricsService {
-  private static landmarkerInstance: FaceLandmarker | null = null;
-  private static isInitializing = false;
+  private static videoLandmarker: FaceLandmarker | null = null;
+  private static imageLandmarker: FaceLandmarker | null = null;
+  private static isInitializingVideo = false;
+  private static isInitializingImage = false;
+  private static visionResolverPromise: Promise<any> | null = null;
 
-  public static async getLandmarker(): Promise<FaceLandmarker> {
-    if (this.landmarkerInstance) {
-      return this.landmarkerInstance;
+  private static getVisionResolver() {
+    if (!this.visionResolverPromise) {
+      this.visionResolverPromise = FilesetResolver.forVisionTasks(
+        'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm'
+      );
+    }
+    return this.visionResolverPromise;
+  }
+
+  /**
+   * Retrieves or initializes FaceLandmarker with guaranteed runningMode ('VIDEO' or 'IMAGE')
+   */
+  public static async getLandmarker(runningMode: 'VIDEO' | 'IMAGE' = 'VIDEO'): Promise<FaceLandmarker> {
+    if (runningMode === 'IMAGE') {
+      return this.getImageLandmarker();
+    }
+    return this.getVideoLandmarker();
+  }
+
+  public static async getImageLandmarker(): Promise<FaceLandmarker> {
+    if (this.imageLandmarker) {
+      return this.imageLandmarker;
     }
 
-    if (this.isInitializing) {
-      // Wait for existing initialization
-      while (this.isInitializing) {
+    if (this.isInitializingImage) {
+      while (this.isInitializingImage) {
         await new Promise(r => setTimeout(r, 50));
       }
-      if (this.landmarkerInstance) return this.landmarkerInstance;
+      if (this.imageLandmarker) return this.imageLandmarker;
     }
 
-    this.isInitializing = true;
+    this.isInitializingImage = true;
     try {
-      const vision = await FilesetResolver.forVisionTasks(
-        'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm'
-      );
+      const vision = await this.getVisionResolver();
+      const modelAssetPath =
+        'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task';
 
-      this.landmarkerInstance = await FaceLandmarker.createFromOptions(vision, {
-        baseOptions: {
-          modelAssetPath:
-            'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
-          delegate: 'GPU'
-        },
-        runningMode: 'VIDEO',
-        numFaces: 1,
-        outputFacialTransformationMatrixes: true,
-        outputFaceBlendshapes: false
-      });
+      try {
+        this.imageLandmarker = await FaceLandmarker.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetPath,
+            delegate: 'GPU'
+          },
+          runningMode: 'IMAGE',
+          numFaces: 1,
+          outputFacialTransformationMatrixes: true,
+          outputFaceBlendshapes: false
+        });
+      } catch (err) {
+        console.warn('GPU delegate failed for IMAGE FaceLandmarker, falling back to CPU:', err);
+        this.imageLandmarker = await FaceLandmarker.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetPath,
+            delegate: 'CPU'
+          },
+          runningMode: 'IMAGE',
+          numFaces: 1,
+          outputFacialTransformationMatrixes: true,
+          outputFaceBlendshapes: false
+        });
+      }
 
-      return this.landmarkerInstance;
-    } catch (err) {
-      console.warn('GPU delegate failed, falling back to CPU delegate:', err);
-      const vision = await FilesetResolver.forVisionTasks(
-        'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm'
-      );
-      this.landmarkerInstance = await FaceLandmarker.createFromOptions(vision, {
-        baseOptions: {
-          modelAssetPath:
-            'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
-          delegate: 'CPU'
-        },
-        runningMode: 'VIDEO',
-        numFaces: 1,
-        outputFacialTransformationMatrixes: true,
-        outputFaceBlendshapes: false
-      });
-      return this.landmarkerInstance;
+      return this.imageLandmarker;
     } finally {
-      this.isInitializing = false;
+      this.isInitializingImage = false;
+    }
+  }
+
+  public static async getVideoLandmarker(): Promise<FaceLandmarker> {
+    if (this.videoLandmarker) {
+      return this.videoLandmarker;
+    }
+
+    if (this.isInitializingVideo) {
+      while (this.isInitializingVideo) {
+        await new Promise(r => setTimeout(r, 50));
+      }
+      if (this.videoLandmarker) return this.videoLandmarker;
+    }
+
+    this.isInitializingVideo = true;
+    try {
+      const vision = await this.getVisionResolver();
+      const modelAssetPath =
+        'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task';
+
+      try {
+        this.videoLandmarker = await FaceLandmarker.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetPath,
+            delegate: 'GPU'
+          },
+          runningMode: 'VIDEO',
+          numFaces: 1,
+          outputFacialTransformationMatrixes: true,
+          outputFaceBlendshapes: false
+        });
+      } catch (err) {
+        console.warn('GPU delegate failed for VIDEO FaceLandmarker, falling back to CPU:', err);
+        this.videoLandmarker = await FaceLandmarker.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetPath,
+            delegate: 'CPU'
+          },
+          runningMode: 'VIDEO',
+          numFaces: 1,
+          outputFacialTransformationMatrixes: true,
+          outputFaceBlendshapes: false
+        });
+      }
+
+      return this.videoLandmarker;
+    } finally {
+      this.isInitializingVideo = false;
     }
   }
 

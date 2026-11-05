@@ -53,8 +53,8 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
     async function initStream() {
       try {
         setIsLoadingModel(true);
-        // Pre-warm MediaPipe
-        await BiometricsService.getLandmarker();
+        // Pre-warm MediaPipe with VIDEO runningMode
+        await BiometricsService.getLandmarker('VIDEO');
 
         if (isCancelled) return;
 
@@ -120,7 +120,7 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
       try {
-        const landmarker = await BiometricsService.getLandmarker();
+        const landmarker = await BiometricsService.getLandmarker('VIDEO');
         const results = landmarker.detectForVideo(video, performance.now());
 
         if (results.faceLandmarks && results.faceLandmarks.length > 0) {

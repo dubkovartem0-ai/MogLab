@@ -43,19 +43,38 @@ export const PhotoUploader: React.FC<PhotoUploaderProps> = ({
   const processImage = async (dataUrl: string) => {
     const img = new Image();
     img.crossOrigin = 'anonymous';
-    img.src = dataUrl;
+
+    img.onerror = () => {
+      setErrorMsg('Не удалось загрузить выбранное изображение.');
+      setIsProcessing(false);
+    };
 
     img.onload = async () => {
       try {
         const canvas = document.createElement('canvas');
-        canvas.width = img.width;
-        canvas.height = img.height;
+        // Cap max dimension to 1280px for optimal WebAssembly processing and avoiding mobile WebGL memory limits
+        const maxDim = 1280;
+        let w = img.width || 720;
+        let h = img.height || 960;
+        if (w > maxDim || h > maxDim) {
+          if (w > h) {
+            h = Math.round((h * maxDim) / w);
+            w = maxDim;
+          } else {
+            w = Math.round((w * maxDim) / h);
+            h = maxDim;
+          }
+        }
+        canvas.width = w;
+        canvas.height = h;
+
         const ctx = canvas.getContext('2d', { willReadFrequently: true });
         if (!ctx) throw new Error('Could not get canvas 2d context');
 
-        ctx.drawImage(img, 0, 0);
+        ctx.drawImage(img, 0, 0, w, h);
 
-        const landmarker = await BiometricsService.getLandmarker();
+        // Explicitly get FaceLandmarker with IMAGE runningMode
+        const landmarker = await BiometricsService.getLandmarker('IMAGE');
         const results = landmarker.detect(canvas);
 
         if (!results.faceLandmarks || results.faceLandmarks.length === 0) {
@@ -85,10 +104,16 @@ export const PhotoUploader: React.FC<PhotoUploaderProps> = ({
         onScanComplete(report);
       } catch (err: any) {
         console.error('Photo analysis failed:', err);
-        setErrorMsg('Ошибка биометрического анализа. Попробуйте другое фото.');
+        setErrorMsg(
+          err?.message
+            ? `Ошибка анализа: ${err.message}`
+            : 'Ошибка биометрического анализа. Попробуйте другое фото.'
+        );
         setIsProcessing(false);
       }
     };
+
+    img.src = dataUrl;
   };
 
   return (
