@@ -65,7 +65,7 @@ export const ProUnlockModal: React.FC<ProUnlockModalProps> = ({
 
   // Option 1: Viral Telegram Invite
   const handleShareInvite = () => {
-    TelegramService.shareReferral('MogLabBot', user.tg_id);
+    TelegramService.shareReferral(TelegramService.botUsername, user.tg_id);
   };
 
   // Option 2: 100 Telegram Stars Payment

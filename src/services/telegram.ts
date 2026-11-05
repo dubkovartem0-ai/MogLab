@@ -66,10 +66,20 @@ export class TelegramService {
     }
   }
 
+  public static get botUsername(): string {
+    return (
+      (import.meta as any)?.env?.VITE_TELEGRAM_BOT_USERNAME ||
+      (typeof process !== 'undefined' ? process.env?.TELEGRAM_BOT_USERNAME : undefined) ||
+      'MogLabAppBot'
+    );
+  }
+
   // Viral Sharing & Referral links
-  public static shareReferral(botUsername: string, userId: number) {
+  public static shareReferral(botUsernameOrUserId: string | number, maybeUserId?: number) {
     this.hapticImpact('heavy');
-    const referralLink = `https://t.me/${botUsername}/app?startapp=ref_${userId}`;
+    const username = typeof botUsernameOrUserId === 'string' ? botUsernameOrUserId : this.botUsername;
+    const userId = typeof botUsernameOrUserId === 'number' ? botUsernameOrUserId : (maybeUserId ?? 0);
+    const referralLink = `https://t.me/${username}/app?startapp=ref_${userId}`;
     const shareText = `🧬 Пройди клинический биометрический скан лица в MogLab. Оцени костную базу (PSL/Harmony) и получи персональный Softmaxxing протокол: ${referralLink}`;
     
     if (this.webApp?.switchInlineQuery) {
@@ -80,9 +90,19 @@ export class TelegramService {
     }
   }
 
-  public static shareBattle(botUsername: string, battleId: string, score: number) {
+  public static shareBattle(botUsernameOrBattleId: string, battleIdOrScore: string | number, maybeScore?: number) {
     this.hapticImpact('heavy');
-    const battleLink = `https://t.me/${botUsername}/app?startapp=battle_${battleId}`;
+    let username = this.botUsername;
+    let battleId = botUsernameOrBattleId;
+    let score = typeof battleIdOrScore === 'number' ? battleIdOrScore : (maybeScore ?? 6.0);
+
+    if (typeof battleIdOrScore === 'string') {
+      username = botUsernameOrBattleId;
+      battleId = battleIdOrScore;
+      score = maybeScore ?? 6.0;
+    }
+
+    const battleLink = `https://t.me/${username}/app?startapp=battle_${battleId}`;
     const text = `⚔️ Я бросаю тебе вызов в Mog Battle! Мой показатель: ${score.toFixed(1)}/10. Прими дуэль и сравни свои пропорции лица: ${battleLink}`;
     
     if (this.webApp?.switchInlineQuery) {

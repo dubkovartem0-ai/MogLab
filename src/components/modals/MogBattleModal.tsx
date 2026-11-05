@@ -23,10 +23,11 @@ export const MogBattleModal: React.FC<MogBattleModalProps> = ({
 
   const currentScore = report?.currentScore || 6.2;
   const battleId = report?.id || 'scan_' + user.tg_id;
-  const battleUrl = `https://t.me/MogLabBot/app?startapp=battle_${battleId}`;
+  const botUsername = TelegramService.botUsername;
+  const battleUrl = `https://t.me/${botUsername}/app?startapp=battle_${battleId}`;
 
   const handleShare = () => {
-    TelegramService.shareBattle('MogLabBot', battleId, currentScore);
+    TelegramService.shareBattle(botUsername, battleId, currentScore);
   };
 
   const handleCopy = () => {
