@@ -15,6 +15,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     try {
+      // 1. Try querying with verified_camera filter
       const { data, error } = await supabaseAdmin
         .from('leaderboard')
         .select('*')
@@ -22,7 +23,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .order('score', { ascending: false })
         .limit(50);
 
-      if (error) throw error;
+      if (error) {
+        // Fallback if column verified_camera is not yet added in Supabase
+        const fallback = await supabaseAdmin
+          .from('leaderboard')
+          .select('*')
+          .order('score', { ascending: false })
+          .limit(50);
+
+        if (fallback.error) throw fallback.error;
+        return res.status(200).json(fallback.data || []);
+      }
+
       return res.status(200).json(data || []);
     } catch (err: any) {
       return res.status(500).json({ error: err.message });
@@ -49,24 +61,35 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     try {
-      const { data, error } = await supabaseAdmin
+      const payload: Record<string, any> = {
+        tg_id: user.id,
+        username: user.username || user.first_name || 'Anonymous',
+        gender: gender || 'male',
+        score: Number(score),
+        potential_score: Number(potential_score),
+        verified_camera: true,
+        updated_at: new Date().toISOString()
+      };
+
+      let { data, error } = await supabaseAdmin
         .from('leaderboard')
-        .upsert(
-          {
-            tg_id: user.id,
-            username: user.username || user.first_name || 'Anonymous',
-            gender: gender || 'male',
-            score: Number(score),
-            potential_score: Number(potential_score),
-            verified_camera: true,
-            updated_at: new Date().toISOString()
-          },
-          { onConflict: 'tg_id' }
-        )
+        .upsert(payload, { onConflict: 'tg_id' })
         .select()
         .single();
 
-      if (error) throw error;
+      if (error && error.message?.includes('verified_camera')) {
+        delete payload.verified_camera;
+        const retry = await supabaseAdmin
+          .from('leaderboard')
+          .upsert(payload, { onConflict: 'tg_id' })
+          .select()
+          .single();
+        if (retry.error) throw retry.error;
+        data = retry.data;
+      } else if (error) {
+        throw error;
+      }
+
       return res.status(200).json(data);
     } catch (err: any) {
       return res.status(500).json({ error: err.message });
