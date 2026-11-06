@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { getAuthenticatedUser } from './supabaseClient';
+import { getAuthenticatedUser } from './supabaseClient.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') {
@@ -33,7 +33,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           label: '1 PRO Scan & Protocol',
           amount: 100 // 100 Stars
         }
-      ]
+      ],
+      provider_token: '' // Empty string required for Telegram Stars
     };
 
     const response = await fetch(`https://api.telegram.org/bot${botToken}/createInvoiceLink`, {

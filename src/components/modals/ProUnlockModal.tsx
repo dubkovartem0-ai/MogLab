@@ -83,6 +83,8 @@ export const ProUnlockModal: React.FC<ProUnlockModalProps> = ({
           origin: { y: 0.6 }
         });
         TelegramService.hapticNotification('success');
+        // Small delay to allow the Telegram Webhook to register the payment in Supabase
+        await new Promise((resolve) => setTimeout(resolve, 1500));
         // If report is open, unlock it immediately
         if (report) {
           await handleUnlockWithCredits();
