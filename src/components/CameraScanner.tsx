@@ -295,8 +295,17 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
     TelegramService.hapticImpact('heavy');
     setIsScanning(true);
 
-    const landmarks = lastLandmarksRef.current;
-    const canvas = canvasRef.current;
+    // CRITICAL: Snapshot exact canvas frame and landmarks at t=0 so movement during 3s doesn't desync!
+    const landmarks = JSON.parse(JSON.stringify(lastLandmarksRef.current)) as LandmarkPoint[];
+    const liveCanvas = canvasRef.current;
+    
+    const snapshotCanvas = document.createElement('canvas');
+    snapshotCanvas.width = liveCanvas.width;
+    snapshotCanvas.height = liveCanvas.height;
+    const snapCtx = snapshotCanvas.getContext('2d', { willReadFrequently: true });
+    if (snapCtx) {
+      snapCtx.drawImage(liveCanvas, 0, 0);
+    }
 
     // Step 1: 0.0s – 1.0s
     setScanStep(1);
@@ -319,9 +328,9 @@ export const CameraScanner: React.FC<CameraScannerProps> = ({
 
     await new Promise(r => setTimeout(r, 1000));
 
-    // Execute Client-Side Mathematical Biometrics & Pixel Analyzer
+    // Execute Client-Side Mathematical Biometrics & Pixel Analyzer on frozen snapshot
     const biometrics = BiometricsService.calculateMetrics(landmarks, gender);
-    const colorimetry = PixelAnalyzerService.analyzeCanvas(canvas, landmarks);
+    const colorimetry = PixelAnalyzerService.analyzeCanvas(snapshotCanvas, landmarks);
     const report = ScoringService.generateReport(gender, biometrics, colorimetry, true);
 
     TelegramService.hapticNotification('success');

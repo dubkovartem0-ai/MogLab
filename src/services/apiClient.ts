@@ -200,4 +200,43 @@ export class ApiClient {
       return true;
     }
   }
+
+  /**
+   * Fetch a Mog Battle challenge by ID
+   */
+  public static async getBattle(battleId: string): Promise<any> {
+    try {
+      return await this.request(`/api/battle?id=${encodeURIComponent(battleId)}`);
+    } catch {
+      return {
+        id: battleId,
+        challenger_name: 'Соперник',
+        challenger_score: 7.4,
+        challenger_metrics: {
+          boneBase: 7.6,
+          appeal: 7.1
+        }
+      };
+    }
+  }
+
+  /**
+   * Save or update a battle record
+   */
+  public static async saveBattle(params: {
+    battleId?: string;
+    name: string;
+    score: number;
+    metrics: any;
+    isJoin?: boolean;
+  }): Promise<{ id: string }> {
+    try {
+      return await this.request('/api/battle', {
+        method: 'POST',
+        body: JSON.stringify(params)
+      });
+    } catch {
+      return { id: params.battleId || 'battle_' + Date.now() };
+    }
+  }
 }

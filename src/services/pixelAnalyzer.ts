@@ -170,7 +170,9 @@ export class PixelAnalyzerService {
       skinLuminanceAvg: 140,
       eyebrowContrast: 0.28,
       lipContrast: 0.24,
-      overallFacialContrast: 0.26
+      overallFacialContrast: 0.26,
+      underEyeDarknessRatio: 0.94,
+      fitzpatrickEstimate: 'Type II'
     };
 
     if (!ctx || width === 0 || height === 0 || landmarks.length < 468) {
@@ -255,6 +257,28 @@ export class PixelAnalyzerService {
       const lipContrast = michelson(skinLuminanceAvg, lipLumAvg);
       const overallFacialContrast = Math.round((eyebrowContrast * 0.6 + lipContrast * 0.4) * 100) / 100;
 
+      // 4. Infraorbital (Under-Eye) Dark Circles Analysis
+      const underEyeIndices = [111, 117, 118, 119, 340, 346, 347, 348];
+      const underEyePoints = underEyeIndices.map(idx => landmarks[idx]).filter(Boolean);
+      const underEyeSamples = this.sampleRegion(ctx, width, height, underEyePoints);
+      let underEyeLumSum = 0;
+      underEyeSamples.forEach(p => {
+        underEyeLumSum += (0.299 * p.r * wb.r + 0.587 * p.g * wb.g + 0.114 * p.b * wb.b);
+      });
+      const underEyeLumAvg = underEyeSamples.length > 0 ? underEyeLumSum / underEyeSamples.length : skinLuminanceAvg * 0.92;
+      const underEyeDarknessRatio = skinLuminanceAvg > 0
+        ? Math.max(0.4, Math.min(1.2, Math.round((underEyeLumAvg / skinLuminanceAvg) * 100) / 100))
+        : 0.92;
+
+      // 5. Fitzpatrick Scale Estimation based on calibrated skin luminance
+      let fitzpatrickEstimate = 'Type II';
+      if (skinLuminanceAvg >= 180) fitzpatrickEstimate = 'Type I';
+      else if (skinLuminanceAvg >= 155) fitzpatrickEstimate = 'Type II';
+      else if (skinLuminanceAvg >= 130) fitzpatrickEstimate = 'Type III';
+      else if (skinLuminanceAvg >= 105) fitzpatrickEstimate = 'Type IV';
+      else if (skinLuminanceAvg >= 80) fitzpatrickEstimate = 'Type V';
+      else fitzpatrickEstimate = 'Type VI';
+
       return {
         whiteBalanceCorrection: wb,
         skinRednessIndex: Math.round(skinRednessIndex * 100) / 100,
@@ -262,7 +286,9 @@ export class PixelAnalyzerService {
         skinLuminanceAvg: Math.round(skinLuminanceAvg),
         eyebrowContrast: Math.round(eyebrowContrast * 100) / 100,
         lipContrast: Math.round(lipContrast * 100) / 100,
-        overallFacialContrast
+        overallFacialContrast,
+        underEyeDarknessRatio,
+        fitzpatrickEstimate
       };
     } catch {
       return defaultMetrics;

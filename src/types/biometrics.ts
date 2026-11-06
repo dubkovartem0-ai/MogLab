@@ -29,6 +29,7 @@ export interface BiometricMetrics {
   // Common
   canthalTiltDegrees: number;
   centralSymmetryIndex: number; // 0..1 (1 is perfect symmetry)
+  orbitalDepth: number; // 3D relative depth of pupils vs brow ridge (higher = deeper-set eyes)
   
   // Male (PSL Engine)
   fwhr: number; // Facial Width-to-Height Ratio (~1.8 - 2.0 ideal)
@@ -57,7 +58,8 @@ export interface PixelColorMetrics {
   eyebrowContrast: number; // Michelson contrast (0..1)
   lipContrast: number; // Michelson contrast (0..1)
   overallFacialContrast: number; // Average feature-to-skin contrast (0..1)
-  fitzpatrickEstimate?: string;
+  underEyeDarknessRatio: number; // Tear trough / under-eye vs cheek luminance (1.0 = equal, <0.88 = dark circles)
+  fitzpatrickEstimate: string; // 'Type I' .. 'Type VI'
 }
 
 export interface HaloItem {

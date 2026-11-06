@@ -7,6 +7,7 @@ import { ResultsDashboard } from './components/ResultsDashboard';
 import { ProUnlockModal } from './components/modals/ProUnlockModal';
 import { MogBattleModal } from './components/modals/MogBattleModal';
 import { LeaderboardModal } from './components/modals/LeaderboardModal';
+import { IncomingBattleModal } from './components/modals/IncomingBattleModal';
 import { TelegramService } from './services/telegram';
 import { ApiClient } from './services/apiClient';
 import { BiometricReport, GenderMode } from './types/biometrics';
@@ -34,6 +35,9 @@ export const App: React.FC = () => {
   const [isProModalOpen, setIsProModalOpen] = useState(false);
   const [isBattleModalOpen, setIsBattleModalOpen] = useState(false);
   const [isLeaderboardModalOpen, setIsLeaderboardModalOpen] = useState(false);
+  const [isIncomingBattleOpen, setIsIncomingBattleOpen] = useState(false);
+  const [activeBattleId, setActiveBattleId] = useState<string | null>(null);
+  const [challengerInfo, setChallengerInfo] = useState({ name: 'Соперник', score: 7.4 });
 
   // Initialize Telegram WebApp & Authenticate
   useEffect(() => {
@@ -41,8 +45,27 @@ export const App: React.FC = () => {
 
     async function loadUser() {
       try {
-        const dbUser = await ApiClient.authenticate();
+        const startParam = TelegramService.getStartParam();
+        const dbUser = await ApiClient.authenticate(startParam);
         setUser(dbUser);
+
+        // Check if opened via Mog Battle challenge link
+        if (startParam && startParam.startsWith('battle_')) {
+          const bId = startParam.replace('battle_', '');
+          setActiveBattleId(bId);
+          try {
+            const battle = await ApiClient.getBattle(bId);
+            if (battle) {
+              setChallengerInfo({
+                name: battle.challenger_name || 'Соперник',
+                score: Number(battle.challenger_score) || 7.4
+              });
+              setIsIncomingBattleOpen(true);
+            }
+          } catch {
+            // fallback
+          }
+        }
       } catch (err) {
         console.error('Failed to auth user:', err);
       }
@@ -67,6 +90,22 @@ export const App: React.FC = () => {
     if (newReport.verifiedCamera) {
       try {
         await ApiClient.submitToLeaderboard(newReport);
+      } catch {
+        // ignore
+      }
+    }
+
+    // If participating in a Mog Battle duel, record the result
+    if (activeBattleId) {
+      try {
+        await ApiClient.saveBattle({
+          battleId: activeBattleId,
+          name: user.username || user.first_name || 'Opponent',
+          score: newReport.currentScore,
+          metrics: newReport.radarData,
+          isJoin: true
+        });
+        setIsBattleModalOpen(true);
       } catch {
         // ignore
       }
@@ -148,6 +187,18 @@ export const App: React.FC = () => {
         isOpen={isLeaderboardModalOpen}
         onClose={() => setIsLeaderboardModalOpen(false)}
         user={user}
+      />
+
+      {/* Incoming Mog Battle Duel Modal */}
+      <IncomingBattleModal
+        isOpen={isIncomingBattleOpen}
+        onClose={() => setIsIncomingBattleOpen(false)}
+        challengerName={challengerInfo.name}
+        challengerScore={challengerInfo.score}
+        onAcceptBattle={() => {
+          setIsIncomingBattleOpen(false);
+          setView('camera');
+        }}
       />
     </div>
   );

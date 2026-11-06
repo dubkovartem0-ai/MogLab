@@ -228,6 +228,17 @@ export class BiometricsService {
     // Interpupillary Distance (IPD)
     const ipd = this.distance(p468, p473);
 
+    // Orbital Depth (Deep-set eyes vs Brow Ridge projection in 3D)
+    // Positive values indicate eyes are set deeper than the supraorbital ridge (Hunter trait)
+    const browL = landmarks[105] || landmarks[70];
+    const browR = landmarks[334] || landmarks[300];
+    const depthL = (p468.z || 0) - (browL.z || 0);
+    const depthR = (p473.z || 0) - (browR.z || 0);
+    const rawOrbitalDepth = (depthL + depthR) / 2;
+    const orbitalDepth = ipd > 0
+      ? Math.round((rawOrbitalDepth / ipd) * 1000) / 1000
+      : 0.08;
+
     // Midface Ratio: IPD / Midface Height (pupils to subnasale)
     const midPupilY = (p468.y + p473.y) / 2;
     const midfaceHeight = Math.abs(pSubnasale.y - midPupilY);
@@ -273,6 +284,7 @@ export class BiometricsService {
     return {
       canthalTiltDegrees,
       centralSymmetryIndex,
+      orbitalDepth,
       fwhr,
       bigonialRatio,
       jawFrontalAngle,

@@ -59,6 +59,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           })
           .eq('tg_id', referrerId);
 
+        // Notify referrer via Telegram Bot
+        const botToken = process.env.TELEGRAM_BOT_TOKEN;
+        if (botToken && referrerId) {
+          const progressMsg = awardCredit
+            ? `🎉 Твой друг завершил первый скан в MogLab!\n⭐️ Тебе начислен +1 PRO-кредит (всего приглашено: ${newQualifiedCount}). Открой приложение, чтобы разблокировать персональный протокол!`
+            : `🔥 Твой друг завершил первый скан в MogLab!\nПрогресс: ${newQualifiedCount % 2}/2 приглашений до бесплатного PRO-отчета.`;
+
+          fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              chat_id: referrerId,
+              text: progressMsg
+            })
+          }).catch(err => console.warn('Failed to send referral push to Telegram:', err));
+        }
+
         return res.status(200).json({
           success: true,
           referralCounted: true,

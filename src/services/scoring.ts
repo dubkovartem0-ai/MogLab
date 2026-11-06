@@ -65,6 +65,9 @@ export class ScoringService {
       ? (biometrics.canthalTiltDegrees - 4.0) / 2.0
       : (biometrics.canthalTiltDegrees - 4.0) / 3.0;
 
+    // Orbital Depth (Deep-set Hunter eyes vs prominent brow ridge)
+    const zOrbital = (biometrics.orbitalDepth - 0.08) / 0.035;
+
     // Symmetry: mean 0.82, std dev 0.065
     const zSymmetry = (biometrics.centralSymmetryIndex - 0.82) / 0.065;
 
@@ -103,7 +106,8 @@ export class ScoringService {
     }
 
     if (gender === 'male') {
-      zBone = zFwhr * 0.28 + zJaw * 0.28 + zMidface * 0.22 + zSymmetry * 0.12 + zCanthal * 0.10;
+      const esrBonus = Math.abs(biometrics.esr - 0.46) <= 0.02 ? 0.25 : 0;
+      zBone = zFwhr * 0.25 + zJaw * 0.25 + zMidface * 0.20 + zOrbital * 0.12 + zSymmetry * 0.10 + zCanthal * 0.08 + esrBonus;
 
       // Chad Synergy Bonus: multiple co-occurring hyper-masculine traits
       if (zFwhr >= 1.0 && zJaw >= 1.2 && zMidface >= 1.0) {
@@ -114,8 +118,9 @@ export class ScoringService {
       const zThirds = (biometrics.facialThirdsBalance.balanceScore - 0.74) / 0.09;
       const zOgee = (biometrics.ogeeCurveProminence - 0.65) / 0.09;
       const zPhiltrum = 1.8 - Math.abs(biometrics.philtrumToChinRatio - 0.50) / 0.06;
+      const zLip = 1.5 - Math.abs(biometrics.lipRatio - 0.72) / 0.09;
 
-      zBone = zThirds * 0.28 + zOgee * 0.26 + zSymmetry * 0.18 + zPhiltrum * 0.18 + zCanthal * 0.10;
+      zBone = zThirds * 0.25 + zOgee * 0.23 + zPhiltrum * 0.18 + zLip * 0.14 + zSymmetry * 0.12 + zCanthal * 0.08;
 
       if (zThirds >= 1.0 && zOgee >= 1.2) {
         zBone += 0.40; // Stacy synergy
@@ -142,11 +147,15 @@ export class ScoringService {
     const contrast = colorimetry.overallFacialContrast;
     const contrastScore = Math.max(2.5, Math.min(9.5, 5.0 + ((contrast - 0.20) / 0.04) * 1.15));
 
+    // Under-Eye (Tear Trough) Darkness Score:
+    const underEyeRatio = colorimetry.underEyeDarknessRatio || 0.94;
+    const underEyeScore = Math.max(2.5, Math.min(9.5, 5.0 + (underEyeRatio - 0.88) * 25));
+
     // Redness Score
     const redness = colorimetry.skinRednessIndex;
     const rednessScore = Math.max(2.5, Math.min(9.0, 5.8 - Math.max(0, redness - 1.12) * 20));
 
-    let appealScore = skinVarianceScore * 0.55 + contrastScore * 0.25 + rednessScore * 0.20;
+    let appealScore = skinVarianceScore * 0.45 + contrastScore * 0.22 + underEyeScore * 0.18 + rednessScore * 0.15;
 
     // Soften lower floor for Appeal (faces without severe skin pathology stay >= 3.2)
     appealScore = Math.max(3.0, Math.min(9.6, Math.round(appealScore * 10) / 10));
@@ -272,7 +281,47 @@ export class ScoringService {
       });
     }
 
-    // 7. Glass Skin Texture (Low Texture Variance)
+    // 7. Deep-Set Eyes (Orbital Depth / Supraorbital projection)
+    if (zOrbital >= 0.7) {
+      candidates.push({
+        id: 'deep_set_eyes',
+        name: 'Deep-Set Eyes (Глубокая посадка)',
+        badge: 'Hunter Feature',
+        zScore: zOrbital,
+        percentile: calcPct(zOrbital),
+        valueText: `+${(biometrics.orbitalDepth * 100).toFixed(1)}%`,
+        impact: '+0.8 к хищному взгляду и выраженности надбровья'
+      });
+    }
+
+    // 8. Under-Eye Freshness (Absence of dark circles / tear troughs)
+    if (underEyeRatio >= 0.94) {
+      const zUnderEye = (underEyeRatio - 0.88) / 0.045;
+      candidates.push({
+        id: 'rested_under_eye',
+        name: 'Infraorbital Freshness',
+        badge: 'Свежесть периорбиты',
+        zScore: zUnderEye,
+        percentile: calcPct(zUnderEye),
+        valueText: `${Math.round(underEyeRatio * 100)}%`,
+        impact: '+0.7 к отдохнувшему и свежему взгляду'
+      });
+    }
+
+    // 9. Female Lips & Philtrum Proportion
+    if (gender === 'female' && biometrics.philtrumToChinRatio >= 0.45 && biometrics.philtrumToChinRatio <= 0.55) {
+      candidates.push({
+        id: 'golden_philtrum',
+        name: 'Golden Ratio Lips/Philtrum',
+        badge: 'Неотеническая гармония',
+        zScore: 1.4,
+        percentile: 92,
+        valueText: `1:2.0 (${biometrics.philtrumToChinRatio.toFixed(2)})`,
+        impact: '+0.8 к привлекательности нижней трети'
+      });
+    }
+
+    // 10. Glass Skin Texture (Low Texture Variance)
     const zSkin = (13.0 - variance) / 3.0;
     if (zSkin >= 0.6) {
       candidates.push({
@@ -322,38 +371,55 @@ export class ScoringService {
     }));
 
     // =========================================================================
-    // 6. RADAR CHART (6 Macro-Axes Normalized 0 - 100%)
+    // 6. RADAR CHART (6 Macro-Axes Normalized 0 - 100%, Gender-Adaptive)
     // =========================================================================
     // 1. Eye Area: canthal tilt and orbital aesthetics
-    const eyeAreaVal = Math.max(25, Math.min(99, Math.round(55 + zCanthal * 18)));
+    const eyeAreaVal = Math.max(25, Math.min(99, Math.round(55 + zCanthal * 14 + zOrbital * 8)));
 
-    // 2. Midface: compact proportions (compact midface >= 1.00 yields 80 - 99%)
-    const midfaceVal = biometrics.midfaceRatio >= 1.00
-      ? Math.min(99, Math.round(82 + (biometrics.midfaceRatio - 1.00) * 120))
-      : Math.max(25, Math.min(82, Math.round((biometrics.midfaceRatio / 1.00) * 82)));
-
-    // 3. Jawline: bigonial width (wide jaw >= 0.88 yields 82 - 99%)
-    const jawlineVal = biometrics.bigonialRatio >= 0.88
-      ? Math.min(99, Math.round(82 + (biometrics.bigonialRatio - 0.88) * 160))
-      : Math.max(25, Math.min(82, Math.round((biometrics.bigonialRatio / 0.88) * 82)));
-
-    // 4. Symmetry: cranial alignment
+    // 2. Symmetry: cranial alignment
     const symmetryVal = Math.max(25, Math.min(99, Math.round(55 + zSymmetry * 18)));
 
-    // 5. Skin Quality: derived from skinVarianceScore
+    // 3. Skin Quality: derived from skinVarianceScore
     const skinQualityVal = Math.max(20, Math.min(99, Math.round(skinVarianceScore * 10.5)));
 
-    // 6. Contrast: facial Michelson contrast
+    // 4. Contrast: facial Michelson contrast
     const contrastVal = Math.max(25, Math.min(99, Math.round(contrastScore * 10.5)));
 
-    const radarData: RadarMetric[] = [
-      { subject: 'Eye Area', value: eyeAreaVal, fullMark: 100 },
-      { subject: 'Midface', value: midfaceVal, fullMark: 100 },
-      { subject: 'Jawline', value: jawlineVal, fullMark: 100 },
-      { subject: 'Symmetry', value: symmetryVal, fullMark: 100 },
-      { subject: 'Skin Quality', value: skinQualityVal, fullMark: 100 },
-      { subject: 'Contrast', value: contrastVal, fullMark: 100 }
-    ];
+    let radarData: RadarMetric[];
+
+    if (gender === 'male') {
+      // 5. Midface: compact proportions (compact midface >= 1.00 yields 80 - 99%)
+      const midfaceVal = biometrics.midfaceRatio >= 1.00
+        ? Math.min(99, Math.round(82 + (biometrics.midfaceRatio - 1.00) * 120))
+        : Math.max(25, Math.min(82, Math.round((biometrics.midfaceRatio / 1.00) * 82)));
+
+      // 6. Jawline: bigonial width (wide jaw >= 0.88 yields 82 - 99%)
+      const jawlineVal = biometrics.bigonialRatio >= 0.88
+        ? Math.min(99, Math.round(82 + (biometrics.bigonialRatio - 0.88) * 160))
+        : Math.max(25, Math.min(82, Math.round((biometrics.bigonialRatio / 0.88) * 82)));
+
+      radarData = [
+        { subject: 'Eye Area', value: eyeAreaVal, fullMark: 100 },
+        { subject: 'Midface', value: midfaceVal, fullMark: 100 },
+        { subject: 'Jawline', value: jawlineVal, fullMark: 100 },
+        { subject: 'Symmetry', value: symmetryVal, fullMark: 100 },
+        { subject: 'Skin Quality', value: skinQualityVal, fullMark: 100 },
+        { subject: 'Contrast', value: contrastVal, fullMark: 100 }
+      ];
+    } else {
+      // Female Harmony: Replace masculine Midface/Jawline with Thirds Balance & Lips/Philtrum
+      const thirdsVal = Math.max(30, Math.min(99, Math.round(biometrics.facialThirdsBalance.balanceScore * 100)));
+      const lipsVal = Math.max(30, Math.min(99, Math.round(88 - Math.abs(biometrics.philtrumToChinRatio - 0.50) * 130)));
+
+      radarData = [
+        { subject: 'Eye Area', value: eyeAreaVal, fullMark: 100 },
+        { subject: 'Thirds Balance', value: thirdsVal, fullMark: 100 },
+        { subject: 'Lips & Philtrum', value: lipsVal, fullMark: 100 },
+        { subject: 'Symmetry', value: symmetryVal, fullMark: 100 },
+        { subject: 'Skin Quality', value: skinQualityVal, fullMark: 100 },
+        { subject: 'Contrast', value: contrastVal, fullMark: 100 }
+      ];
+    }
 
     // =========================================================================
     // 7. PAYWALL DEBUFF HOOK
