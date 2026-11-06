@@ -60,6 +60,7 @@ export interface PixelColorMetrics {
   overallFacialContrast: number; // Average feature-to-skin contrast (0..1)
   underEyeDarknessRatio: number; // Tear trough / under-eye vs cheek luminance (1.0 = equal, <0.88 = dark circles)
   fitzpatrickEstimate: string; // 'Type I' .. 'Type VI'
+  acneInflammationScore?: number; // 0..1 (0 = flawless, 1 = severe inflammatory erythema/acne)
 }
 
 export interface HaloItem {

@@ -185,9 +185,12 @@ export class BiometricsService {
     const rightTiltDeg = (rightTiltRad * 180) / Math.PI;
     const canthalTiltDegrees = Math.round(((leftTiltDeg + rightTiltDeg) / 2) * 10) / 10;
 
-    // 2. Central Symmetry Index (RMS error of bilateral pairs vs facial midline)
-    // Midline defined by Glabella (9) and Chin (152)
-    const midX = (pGlabella.x + pChin.x) / 2;
+    // 2. Central Symmetry Index (Perpendicular distance to Glabella-Menton midline)
+    // Invariant to head tilt / roll angles
+    const lineDx = pChin.x - pGlabella.x;
+    const lineDy = pChin.y - pGlabella.y;
+    const lineLen = Math.hypot(lineDx, lineDy) || 1;
+
     const bilateralPairs = [
       [33, 263], [133, 362], [234, 454], [172, 397],
       [70, 300], [105, 334], [61, 291], [116, 345]
@@ -196,23 +199,30 @@ export class BiometricsService {
     bilateralPairs.forEach(([idxL, idxR]) => {
       const ptL = landmarks[idxL];
       const ptR = landmarks[idxR];
-      const distL = Math.abs(ptL.x - midX);
-      const distR = Math.abs(ptR.x - midX);
+
+      // Perpendicular signed distance to midline line
+      const distL = Math.abs(lineDx * (pGlabella.y - ptL.y) - (pGlabella.x - ptL.x) * lineDy) / lineLen;
+      const distR = Math.abs(lineDx * (pGlabella.y - ptR.y) - (pGlabella.x - ptR.x) * lineDy) / lineLen;
+
       const diff = Math.abs(distL - distR) / Math.max(distL, distR, 0.01);
       sumSymmetryDev += diff;
     });
     const avgDev = sumSymmetryDev / bilateralPairs.length;
-    const centralSymmetryIndex = Math.max(0, Math.min(1, Math.round((1 - avgDev * 1.5) * 100) / 100));
+    // High-precision symmetry index (0.75 - 0.95 for normal faces)
+    const centralSymmetryIndex = Math.max(0.35, Math.min(0.98, Math.round((1 - avgDev * 1.25) * 100) / 100));
 
     // 3. Bizygomatic Width
     const bizygomaticWidth = this.distance(pZygL, pZygR);
 
     // 4. Male metrics (PSL Engine)
-    // FWHR: Bizygomatic Width / (Brow to Upper Lip)
-    const browToUpperLipHeight = Math.abs(pUpperLip.y - pGlabella.y);
-    const fwhr = browToUpperLipHeight > 0
-      ? Math.round((bizygomaticWidth / browToUpperLipHeight) * 100) / 100
-      : 1.85;
+    // FWHR: Bizygomatic Width / (Brow to Upper Lip in 3D to resist pitch tilt)
+    const browToUpperLip3D = Math.sqrt(
+      Math.pow(pUpperLip.x - pGlabella.x, 2) +
+      Math.pow(pUpperLip.y - pGlabella.y, 2) +
+      Math.pow((pUpperLip.z || 0) - (pGlabella.z || 0), 2)
+    );
+    const rawFwhr = browToUpperLip3D > 0 ? bizygomaticWidth / browToUpperLip3D : 1.85;
+    const fwhr = Math.round(Math.min(2.15, Math.max(1.55, rawFwhr)) * 100) / 100;
 
     // Bigonial Ratio: Bigonial Width / Bizygomatic Width
     const bigonialWidth = this.distance(pGonL, pGonR);
@@ -239,12 +249,18 @@ export class BiometricsService {
       ? Math.round((rawOrbitalDepth / ipd) * 1000) / 1000
       : 0.08;
 
-    // Midface Ratio: IPD / Midface Height (pupils to subnasale)
+    // Midface Ratio: IPD / Midface Height (pupils to subnasale in 3D)
+    // Clamped strictly to realistic human anthropometric limits (0.80 - 1.18)
+    const midPupilX = (p468.x + p473.x) / 2;
     const midPupilY = (p468.y + p473.y) / 2;
-    const midfaceHeight = Math.abs(pSubnasale.y - midPupilY);
-    const midfaceRatio = midfaceHeight > 0
-      ? Math.round((ipd / midfaceHeight) * 100) / 100
-      : 1.0;
+    const midPupilZ = ((p468.z || 0) + (p473.z || 0)) / 2;
+    const midfaceHeight3D = Math.sqrt(
+      Math.pow(pSubnasale.x - midPupilX, 2) +
+      Math.pow(pSubnasale.y - midPupilY, 2) +
+      Math.pow((pSubnasale.z || 0) - midPupilZ, 2)
+    );
+    const rawMidfaceRatio = midfaceHeight3D > 0 ? ipd / midfaceHeight3D : 1.0;
+    const midfaceRatio = Math.round(Math.min(1.18, Math.max(0.80, rawMidfaceRatio)) * 100) / 100;
 
     // ESR (Eye Separation Ratio): IPD / Bizygomatic width
     const esr = bizygomaticWidth > 0

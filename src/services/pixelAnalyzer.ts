@@ -111,7 +111,7 @@ export class PixelAnalyzerService {
   }
 
   /**
-   * Step 1: Calibrate White Balance using Sclera (Eye White) as reference
+   * Step 2: Calibrate White Balance using Sclera (Eye White) as reference
    */
   public static calibrateSclera(
     ctx: CanvasRenderingContext2D,
@@ -153,6 +153,90 @@ export class PixelAnalyzerService {
   }
 
   /**
+   * Performs clinical dermoscopic analysis of the bilateral cheek regions
+   * to detect active acne pustules, papules, post-inflammatory erythema (PIE),
+   * and separates chrominance blotchiness from monochromatic anatomical bone shadows.
+   */
+  public static analyzeCheekAcneAndErythema(
+    ctx: CanvasRenderingContext2D,
+    width: number,
+    height: number,
+    landmarks: LandmarkPoint[],
+    wb: { r: number; g: number; b: number }
+  ): {
+    acneInflammationScore: number; // 0..1 (0 = clear glass skin, 1 = severe inflammatory acne)
+    chromaStdDev: number;          // Standard deviation of (R - G) across cheek
+    erythemaRatio: number;         // Ratio of red excess
+    inflamedSpotPercent: number;   // Percent of cheek covered by inflamed red dots
+  } {
+    // Bilateral cheek zone polygons
+    // Left cheek: 116 (malar), 123, 147, 213, 192, 138, 172 (gonion), 58, 234 (tragus)
+    // Right cheek: 345 (malar), 352, 376, 433, 416, 367, 397 (gonion), 288, 454 (tragus)
+    const leftCheekIdx = [116, 123, 147, 213, 192, 138, 172, 58, 132, 234];
+    const rightCheekIdx = [345, 352, 376, 433, 416, 367, 397, 288, 361, 454];
+
+    const leftCheekPoints = leftCheekIdx.map(i => landmarks[i]).filter(Boolean);
+    const rightCheekPoints = rightCheekIdx.map(i => landmarks[i]).filter(Boolean);
+
+    const samplesL = this.sampleRegion(ctx, width, height, leftCheekPoints);
+    const samplesR = this.sampleRegion(ctx, width, height, rightCheekPoints);
+    const allCheekSamples = [...samplesL, ...samplesR];
+
+    if (allCheekSamples.length < 15) {
+      return { acneInflammationScore: 0.05, chromaStdDev: 4, erythemaRatio: 1.1, inflamedSpotPercent: 1 };
+    }
+
+    const chromaList: number[] = [];
+    let sumChroma = 0;
+    let sumRedRatio = 0;
+
+    allCheekSamples.forEach(p => {
+      const calibR = Math.min(255, p.r * wb.r);
+      const calibG = Math.min(255, p.g * wb.g);
+      const calibB = Math.min(255, p.b * wb.b);
+
+      const diffRG = calibR - calibG;
+      const gbMean = (calibG + calibB) / 2 || 1;
+      const rRatio = calibR / gbMean;
+
+      chromaList.push(diffRG);
+      sumChroma += diffRG;
+      sumRedRatio += rRatio;
+    });
+
+    const avgChroma = sumChroma / chromaList.length;
+    const avgRedRatio = sumRedRatio / chromaList.length;
+
+    let varSum = 0;
+    let inflamedSpotsCount = 0;
+
+    chromaList.forEach(c => {
+      varSum += Math.pow(c - avgChroma, 2);
+      // Inflammatory red acne spot condition:
+      // Either relative jump (+15 above baseline) or absolute high red dominance (> 30)
+      if (c > avgChroma + 15 || c > 30) {
+        inflamedSpotsCount++;
+      }
+    });
+
+    const chromaStdDev = Math.sqrt(varSum / chromaList.length);
+    const inflamedSpotPercent = Math.round((inflamedSpotsCount / chromaList.length) * 100);
+
+    // Normalized Acne Severity Score (0..1)
+    // 12%+ inflamed spots = severe acne
+    const spotPenalty = Math.min(1.0, inflamedSpotPercent / 12);
+    const blotchPenalty = Math.min(1.0, Math.max(0, (chromaStdDev - 6.5) / 14));
+    const acneInflammationScore = Math.max(0, Math.min(1, spotPenalty * 0.70 + blotchPenalty * 0.30));
+
+    return {
+      acneInflammationScore,
+      chromaStdDev: Math.round(chromaStdDev * 10) / 10,
+      erythemaRatio: Math.round(avgRedRatio * 100) / 100,
+      inflamedSpotPercent
+    };
+  }
+
+  /**
    * Step 2 & 3: Local Skin Analysis with Anatomical Bone Shadow Filtering & Facial Michelson Contrast
    */
   public static analyzeCanvas(
@@ -183,7 +267,10 @@ export class PixelAnalyzerService {
       // 1. Sclera White Balance
       const wb = this.calibrateSclera(ctx, width, height, landmarks);
 
-      // 2. High-Frequency vs Low-Pass Skin Texture Filtering:
+      // 2. Clinical Dermoscopic Cheek Acne & Erythema Analysis
+      const acneDermo = this.analyzeCheekAcneAndErythema(ctx, width, height, landmarks, wb);
+
+      // 3. High-Frequency vs Low-Pass Skin Texture Filtering:
       // We sample isolated circular patches across anatomical areas to isolate high-frequency
       // texture noise (wrinkles, acne, pores, stubble) from low-frequency bone shadows (cheek hollows, brow ridges).
       const patchRadius = Math.max(6, Math.floor(width * 0.025)); // ~10-14px
@@ -217,17 +304,28 @@ export class PixelAnalyzerService {
       const patchCount = validPatches || 1;
       const avgLocalStdDev = totalTextureDev / patchCount;
       const avgHighFreqNoise = totalHighFreqNoise / patchCount;
-      const skinRednessIndex = totalRedness / patchCount;
+      const rawRedness = totalRedness / patchCount;
       const skinLuminanceAvg = totalLum / patchCount;
 
-      // Pure Skin Texture Variance:
-      // Glass skin yields 4.0 .. 7.5.
-      // Average skin yields 9.0 .. 13.0.
-      // Wrinkles, acne, stubble yield 18.0 .. 30.0+.
-      // (Anatomical cheekbone shadows DO NOT inflate this because each patch is evaluated locally!)
-      const skinLuminanceVariance = Math.round((avgLocalStdDev + avgHighFreqNoise) * 10) / 10;
+      // Smart Bone Shadow vs Inflammatory Acne Disentanglement:
+      // In clear skin with deep bone hollows (like Jordan Barrett), chrominance is uniform
+      // (acneInflammationScore < 0.15, chromaStdDev < 7.8). We cap monochrome shadow variance
+      // so clean skin with hollow cheeks is recognized as high appeal glass skin (5.5 - 7.8)!
+      // In acne-affected skin, red inflammatory spikes and blotchiness heavily inflate variance (20.0 - 38.0+).
+      let effectiveVariance = avgLocalStdDev + avgHighFreqNoise;
+      if (acneDermo.acneInflammationScore < 0.15 && acneDermo.chromaStdDev < 7.8) {
+        effectiveVariance = Math.min(effectiveVariance, 7.8);
+      } else {
+        effectiveVariance += acneDermo.acneInflammationScore * 18 + acneDermo.inflamedSpotPercent * 0.6;
+      }
+      const skinLuminanceVariance = Math.round(effectiveVariance * 10) / 10;
 
-      // 3. Eyebrows & Lips Contrast Analysis (Michelson Contrast)
+      // Stricter skin redness index incorporating dermoscopic erythema
+      const skinRednessIndex = Math.round(
+        Math.max(rawRedness, acneDermo.erythemaRatio + acneDermo.acneInflammationScore * 0.40) * 100
+      ) / 100;
+
+      // 4. Eyebrows & Lips Contrast Analysis (Michelson Contrast)
       const browIndices = [70, 63, 105, 66, 336, 296, 334, 293];
       const browPoints = browIndices.map(idx => landmarks[idx]).filter(Boolean);
       const browSamples = this.sampleRegion(ctx, width, height, browPoints);
@@ -288,7 +386,8 @@ export class PixelAnalyzerService {
         lipContrast: Math.round(lipContrast * 100) / 100,
         overallFacialContrast,
         underEyeDarknessRatio,
-        fitzpatrickEstimate
+        fitzpatrickEstimate,
+        acneInflammationScore: Math.round(acneDermo.acneInflammationScore * 100) / 100
       };
     } catch {
       return defaultMetrics;

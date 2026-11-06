@@ -71,16 +71,14 @@ export class ScoringService {
     // Symmetry: mean 0.82, std dev 0.065
     const zSymmetry = (biometrics.centralSymmetryIndex - 0.82) / 0.065;
 
-    // Midface Ratio (Asymmetric: hyper-compact midface >= 1.00 is a signature Chad/supermodel trait!)
+    // Midface Ratio (Anatomically bounded, optimal 0.98 - 1.10)
     let zMidface: number;
-    if (biometrics.midfaceRatio >= 1.00) {
-      // Exponential reward for hyper-compact midface
-      const excess = biometrics.midfaceRatio - 1.00;
-      zMidface = 1.2 + Math.min(2.5, excess * 11);
-    } else if (biometrics.midfaceRatio >= 0.90) {
-      zMidface = ((biometrics.midfaceRatio - 0.90) / 0.10) * 1.2;
+    if (biometrics.midfaceRatio >= 1.02) {
+      zMidface = 1.0 + Math.min(1.4, (biometrics.midfaceRatio - 1.02) * 8);
+    } else if (biometrics.midfaceRatio >= 0.94) {
+      zMidface = ((biometrics.midfaceRatio - 0.94) / 0.08) * 1.0;
     } else {
-      zMidface = -Math.min(2.5, (0.90 - biometrics.midfaceRatio) / 0.055);
+      zMidface = -Math.min(2.2, (0.94 - biometrics.midfaceRatio) / 0.07);
     }
 
     // Jawline / Bigonial Ratio (Asymmetric: wide masculine ramus >= 0.88 rewarded exponentially)
@@ -94,24 +92,26 @@ export class ScoringService {
       zJaw = -Math.min(2.5, (0.82 - biometrics.bigonialRatio) / 0.045);
     }
 
-    // FWHR (Asymmetric: broad masculine frame >= 1.88 rewarded)
+    // FWHR (Balanced: ideal 1.84 - 1.98; overly wide/round faces penalized)
     let zFwhr: number;
-    if (biometrics.fwhr >= 1.88) {
-      const excess = biometrics.fwhr - 1.88;
-      zFwhr = 1.0 + Math.min(2.5, excess * 12);
-    } else if (biometrics.fwhr >= 1.80) {
-      zFwhr = ((biometrics.fwhr - 1.80) / 0.08) * 1.0;
+    if (biometrics.fwhr >= 1.84 && biometrics.fwhr <= 2.00) {
+      zFwhr = 0.7 + ((biometrics.fwhr - 1.84) / 0.16) * 0.8;
+    } else if (biometrics.fwhr > 2.00) {
+      zFwhr = Math.max(0.3, 1.5 - (biometrics.fwhr - 2.00) * 4.0);
+    } else if (biometrics.fwhr >= 1.74) {
+      zFwhr = ((biometrics.fwhr - 1.74) / 0.10) * 0.7;
     } else {
-      zFwhr = -Math.min(2.5, (1.80 - biometrics.fwhr) / 0.07);
+      zFwhr = -Math.min(2.0, (1.74 - biometrics.fwhr) / 0.08);
     }
 
     if (gender === 'male') {
-      const esrBonus = Math.abs(biometrics.esr - 0.46) <= 0.02 ? 0.25 : 0;
-      zBone = zFwhr * 0.25 + zJaw * 0.25 + zMidface * 0.20 + zOrbital * 0.12 + zSymmetry * 0.10 + zCanthal * 0.08 + esrBonus;
+      const esrBonus = Math.abs(biometrics.esr - 0.46) <= 0.02 ? 0.20 : 0;
+      // Rebalanced weights: Jaw (0.26), Symmetry (0.20), Eyes/Orbital (0.22), Midface (0.16), FWHR (0.16)
+      zBone = zJaw * 0.26 + zSymmetry * 0.20 + (zCanthal * 0.10 + zOrbital * 0.12) + zMidface * 0.16 + zFwhr * 0.16 + esrBonus;
 
-      // Chad Synergy Bonus: multiple co-occurring hyper-masculine traits
-      if (zFwhr >= 1.0 && zJaw >= 1.2 && zMidface >= 1.0) {
-        zBone += 0.45;
+      // Chad / Supermodel Synergy: requires jawline, hunter eyes, compact midface AND symmetry!
+      if (zJaw >= 1.0 && (zCanthal + zOrbital) >= 1.0 && zMidface >= 0.6 && zSymmetry >= 0.4) {
+        zBone += 0.50;
       }
     } else {
       // Female Harmony Engine
@@ -132,16 +132,9 @@ export class ScoringService {
     // =========================================================================
     // 2. APPEAL SCORE CALCULATION (High-Frequency Skin Texture & Contrast)
     // =========================================================================
-    // skinLuminanceVariance is now high-frequency patch texture noise
-    // (Anatomical cheekbone shadows do NOT contaminate this!)
     const variance = colorimetry.skinLuminanceVariance;
-
-    // Sigmoid response for pure skin texture:
-    // Glass skin (< 8.0): 7.8 .. 9.0
-    // Good normal skin (9.0 .. 13.0): 5.8 .. 7.5
-    // Rough pores / stubble / light wrinkles (14.0 .. 18.0): 4.0 .. 5.5
-    // Deep wrinkles / severe acne (> 20.0): 2.5 .. 3.5
-    const skinVarianceScore = 1.8 + 7.8 / (1.0 + Math.exp((variance - 13.0) / 3.4));
+    // Severe acne drops skinVarianceScore down to 1.8 .. 3.2
+    const skinVarianceScore = 1.5 + 7.8 / (1.0 + Math.exp((variance - 13.5) / 3.0));
 
     // Contrast Score
     const contrast = colorimetry.overallFacialContrast;
@@ -151,25 +144,30 @@ export class ScoringService {
     const underEyeRatio = colorimetry.underEyeDarknessRatio || 0.94;
     const underEyeScore = Math.max(2.5, Math.min(9.5, 5.0 + (underEyeRatio - 0.88) * 25));
 
-    // Redness Score
+    // Stricter Redness & Inflammatory Acne Score:
     const redness = colorimetry.skinRednessIndex;
-    const rednessScore = Math.max(2.5, Math.min(9.0, 5.8 - Math.max(0, redness - 1.12) * 20));
+    const acneInflammation = colorimetry.acneInflammationScore || 0;
+    const rednessScore = Math.max(1.5, Math.min(9.0, 6.2 - Math.max(0, redness - 1.08) * 30 - acneInflammation * 4.5));
 
-    let appealScore = skinVarianceScore * 0.45 + contrastScore * 0.22 + underEyeScore * 0.18 + rednessScore * 0.15;
-
-    // Soften lower floor for Appeal (faces without severe skin pathology stay >= 3.2)
-    appealScore = Math.max(3.0, Math.min(9.6, Math.round(appealScore * 10) / 10));
+    // Appeal weights: skin texture (0.42), redness/acne (0.28), contrast (0.18), under-eye (0.12)
+    let appealScore = skinVarianceScore * 0.42 + rednessScore * 0.28 + contrastScore * 0.18 + underEyeScore * 0.12;
+    appealScore = Math.max(1.8, Math.min(9.6, Math.round(appealScore * 10) / 10));
 
     // =========================================================================
-    // 3. OVERALL CURRENT & POTENTIAL SCORES
+    // 3. OVERALL CURRENT & POTENTIAL SCORES WITH CLINICAL TIER GATEKEEPING
     // =========================================================================
-    let currentScore = Math.round((boneScore * 0.60 + appealScore * 0.40) * 10) / 10;
+    let currentScore = Math.round((boneScore * 0.55 + appealScore * 0.45) * 10) / 10;
 
-    // Absolute minimum for faces without severe asymmetry is 3.7
-    if (biometrics.centralSymmetryIndex >= 0.70) {
-      currentScore = Math.max(3.7, currentScore);
+    // Severe acne / low appeal gatekeeper:
+    // If appeal <= 3.8 (acne lesions / high redness), current tier cannot exceed MTN (5.2 max)
+    if (appealScore <= 3.8 && currentScore >= 5.3) {
+      currentScore = Math.min(5.1, currentScore);
     }
-    currentScore = Math.min(9.8, currentScore);
+    if (appealScore <= 2.8 && currentScore >= 4.4) {
+      currentScore = Math.min(4.2, currentScore);
+    }
+
+    currentScore = Math.max(2.5, Math.min(9.8, currentScore));
 
     // Potential Score (Skincare + debloating potential)
     const potentialAppeal = Math.min(9.5, Math.max(appealScore + 1.6, 8.4));
@@ -379,8 +377,9 @@ export class ScoringService {
     // 2. Symmetry: cranial alignment
     const symmetryVal = Math.max(25, Math.min(99, Math.round(55 + zSymmetry * 18)));
 
-    // 3. Skin Quality: derived from skinVarianceScore
-    const skinQualityVal = Math.max(20, Math.min(99, Math.round(skinVarianceScore * 10.5)));
+    // 3. Skin Quality: composite of texture smoothness & absence of inflammatory acne/erythema
+    const compositeSkinScore = skinVarianceScore * 0.55 + rednessScore * 0.45;
+    const skinQualityVal = Math.max(15, Math.min(99, Math.round(compositeSkinScore * 10.5)));
 
     // 4. Contrast: facial Michelson contrast
     const contrastVal = Math.max(25, Math.min(99, Math.round(contrastScore * 10.5)));
